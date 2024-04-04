@@ -1,0 +1,4 @@
+(library
+ (name ChatApp)
+ (preprocess (pps lwt_ppx))
+ (libraries lwt lwt.unix logs.lwt))
