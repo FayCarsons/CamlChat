@@ -1,9 +1,10 @@
 open ChatApp
 open Util
+module Server = Connection.Server
+module Client = Connection.Client
 
 let () =
-  Logs.set_reporter (Logs.format_reporter ());
-  Logs.set_level (Some Logs.Debug);
   match Args.get_args () with
-  | StartServer port -> Tcp.Server.start port
-  | StartClient (address, port) -> Tcp.Client.start address port
+  | StartServer port -> Server.start port
+  | StartClient (address, port) -> Client.start address port
+  | SendFile (address, port, path) -> Client.start_file address port path
