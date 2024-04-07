@@ -3,6 +3,8 @@ open Syntax
 open OUnit
 open OUnitLwt
 module App = ChatApp.Connection
+module Util = ChatApp.Util
+module Args = ChatApp.Args
 
 let message = "Hello, Ahrefs!"
 
@@ -55,5 +57,77 @@ let acknowledged =
       assert_equal App.Acknowledged res;
       Lwt.return_unit
 
-let suite = "Chat app tests" >::: [ read; write; acknowledged ]
+let validate_port =
+  "Test Util.validate_port" >:: fun _ ->
+  let valid = [ "8080"; "3000"; "80"; "443"; "4173"; "5173" ] in
+  let res = List.map Util.validate_port valid in
+  assert (List.for_all Result.is_ok res);
+
+  let invalid =
+    [
+      "0";
+      "abcd";
+      "Unix.Unix_error (Unix.EUNKNOWNERR, \" \", \" \")";
+      string_of_int Int.max_int;
+    ]
+  in
+  let res = List.map Util.validate_port invalid in
+  assert (List.for_all Result.is_error res)
+
+let validate_uri =
+  "Test Util.validate_uri" >:: fun _ ->
+  let valid =
+    [ "127.0.0.1:8080"; "0.0.0.0:3000"; "ahrefs.com:443"; "google.com:80" ]
+  in
+  let res = List.map Util.validate_uri valid in
+  assert (List.for_all Result.is_ok res);
+
+  let fuzz =
+    let bytes = Bytes.create 128 in
+    for i = 0 to 127 do
+      Bytes.set_uint8 bytes i (Random.int 256)
+    done;
+    String.of_bytes bytes
+  in
+  let invalid =
+    [
+      "A long winding road";
+      "0.0.0.0.0.0.0.0.0.0.0.0.0.0";
+      "127.0.0.1:0";
+      "ahrefs.com:F0o3aR";
+      "0.0.0.0" ^ string_of_int Int.max_int;
+      fuzz;
+    ]
+  in
+  let res = List.map Util.validate_uri invalid in
+  assert (List.for_all Result.is_error res)
+
+let parse_args =
+  "Test Args.parse" >:: fun _ ->
+  assert_equal (Args.parse [ "--server"; "3000" ]) (Util.StartServer 3000);
+  assert_equal (Args.parse [ "--server" ]) (Util.StartServer 8080);
+  assert_equal
+    (Args.parse [ "--client" ])
+    (Util.StartClient (Unix.inet_addr_loopback, 8080));
+  assert_equal
+    (Args.parse [ "--client"; "127.0.0.1:8080" ])
+    (Util.StartClient (Unix.inet_addr_loopback, 8080));
+  assert_equal
+    (Args.parse [ "--client"; "127.0.0.1:8080"; "--file"; "/dev/null" ])
+    (Util.SendFile (Unix.inet_addr_loopback, 8080, "/dev/null"));
+  let try_parse arg_list =
+    assert (
+      try
+        Args.parse arg_list |> ignore;
+        false
+      with Args.ParseError _ -> true)
+  in
+  try_parse [];
+  try_parse [ ""; ""; ""; "" ];
+  try_parse [ "password:"; "hunter2" ]
+
+let suite =
+  "Chat app tests"
+  >::: [ read; write; acknowledged; validate_port; validate_uri; parse_args ]
+
 let _ = OUnit.run_test_tt_main suite

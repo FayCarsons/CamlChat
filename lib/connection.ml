@@ -18,7 +18,7 @@ and event =
   | New of connection  (** New connection opened *)
 
 exception Fatal of string
-(** raised when we encounter an error we cannot recovr from *)
+(** raised when we encounter an error we cannot recover from *)
 
 (** Mode agnostic IO functions, initializers, and constants describing the protocol the app uses *)
 module Protocol = struct
@@ -101,6 +101,9 @@ end
 module Server = struct
   open Protocol
 
+  (* We only want to allow one client connection at a time *)
+  let backlog = 1
+
   (** The Sender process, concurrently checks our mailbox for messages that 
       signal changes in state and listens to stdin for messages. 
 
@@ -127,9 +130,6 @@ module Server = struct
       | None -> raise (Fatal "Stdin closed unexpectedly")
     in
     Lwt.pick [ check_mail (); read_stdin () ] >>= fun state -> sender state
-
-  (* We only want to allow one client connection at a time *)
-  let backlog = 1
 
   (** The Listener process, reads from connection recursively and handles variant returned *)
   let listener (sock, state) =
@@ -195,13 +195,15 @@ module Client = struct
 
   (* Regular behavior, when started with the "--client" flag *)
 
-  (** Collects chars from a string_of_float until a non-zero digit is found *)
-  let take_first_nonzero s =
+  (** Collects chars from a string_of_float until a non-zero digit after the 
+      third position. Ideally, this gives us a meaningful number 
+      (or, failing that, short) wrt the round-trip time of a message*)
+  let meaningful_chars s =
     let rec take i acc =
-      if i >= String.length s then acc
+      if i >= 6 then acc
       else
         match s.[i] with
-        | '1' .. '9' as digit -> acc ^ String.make 1 digit
+        | '1' .. '9' as digit when i >= 3 -> acc ^ String.make 1 digit
         | c -> take (succ i) (acc ^ String.make 1 c)
     in
     take 0 ""
@@ -210,7 +212,7 @@ module Client = struct
       string of the elapsd time*)
   let show_elapsed time =
     let elapsed = Unix.gettimeofday () -. time |> string_of_float in
-    Printf.sprintf "> %ss" @@ take_first_nonzero elapsed
+    Printf.sprintf "> %ss" @@ meaningful_chars elapsed
 
   (** The sender process, reads from stdin, awaits an 'ackowledged' message, 
       and then recurses. 
@@ -297,11 +299,11 @@ module Client = struct
     let* fd = Lwt_unix.openfile path [ Unix.O_RDONLY ] 0 in
     let* fsize = Lwt_unix.(stat path >|= fun stats -> stats.st_size) in
     let num_chunks = fsize / chunk_size in
-    let in_channel = Lwt_io.(of_fd ~mode:Input fd) in
+    let file_in = Lwt_io.(of_fd ~mode:Input fd) in
     let buf = Bytes.create chunk_size in
     let start_time = Unix.gettimeofday () in
     let rec send_chunk i =
-      Lwt_io.read_into in_channel buf 0 chunk_size >>= function
+      Lwt_io.read_into file_in buf 0 chunk_size >>= function
       | 0 -> Lwt.return_unit
       | read ->
           let* _prefix = Lwt_io.write_int32 output @@ Int32.of_int read in
