@@ -12,32 +12,32 @@ let ( >> ) f g x = g @@ f x
 
 (* Arg validation *)
 
+let port_in_range = function
+  | n when 0 < n && n <= 65535 -> Ok n
+  | _ -> Error "Port not in valid range"
+
 (** Checks that port string is integer and in range of useable ports. 
     Ideally would check if port is open, bu implementing this introduces
     unpredictable behavior wrt port binding in app *)
 let validate_port maybe_port =
-  let in_range = function
-    | n when 0 < n && n <= 65535 -> Ok n
-    | _ -> Error "Port not in valid range"
-  in
   int_of_string_opt maybe_port
   |> Option.to_result ~none:"Port is not an integer"
-  |> Fun.flip Result.bind in_range
+  |> Fun.flip Result.bind port_in_range
 
-(** Checks that uri contains valid inet address and port *)
-let validate_uri maybe_uri =
-  match String.split_on_char ':' maybe_uri with
-  | [ addr; port ] -> (
-      try
-        let addr = Unix.inet_addr_of_string addr in
-        let port =
-          match validate_port port with
-          | Ok port -> port
-          | Error err -> failwith err
+(** Checks that uri contains either a valid inet_adress or hostname *)
+let validate_uri uri_str =
+  try
+    let maybe_uri = Uri.of_string @@ "//" ^ uri_str in
+    match (Uri.host maybe_uri, Uri.port maybe_uri) with
+    | Some host, Some port ->
+        let addr =
+          (Unix.gethostbyname host).h_addr_list |> Fun.flip Array.get 0
         in
-        Ok (addr, port)
-      with _ -> Error "Unable to parse ipv4/ipv6 portion of address")
-  | _ -> Error "Invalid address format, expecting \'{ipv4|ipv6}:{port}\'"
+        Result.map (fun port -> (addr, port)) @@ port_in_range port
+    | _ -> Error "address/hostname must contain a host and a port!"
+  with Unix.Unix_error (msg, _, _) ->
+    Result.error
+    @@ Printf.sprintf "Invalid address/hostname: %s" (Unix.error_message msg)
 
 (** Checks that file exists and process has permission access it *)
 let validate_path path =

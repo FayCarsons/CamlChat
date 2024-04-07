@@ -4,23 +4,11 @@
 
 (generate_opam_files true)
 
-(source
- (github username/reponame))
-
-(authors "Author Name")
-
-(maintainers "Maintainer Name")
-
-(license LICENSE)
-
-(documentation https://url/to/documentation)
+(authors "Fay Carsons")
 
 (package
  (name ChatApp)
- (synopsis "A short synopsis")
- (description "A longer description")
- (depends ocaml dune)
+ (synopsis "Simple one-on-one socket chat app")
+ (depends ocaml dune lwt ounit2 ounit2-lwt uri)
  (tags
-  (topics "to describe" your project)))
-
-; See the complete stanza docs at https://dune.readthedocs.io/en/stable/dune-files.html#dune-project
+  (topics TCP CLI Network)))

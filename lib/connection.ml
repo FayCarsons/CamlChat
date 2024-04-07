@@ -38,7 +38,6 @@ module Protocol = struct
   (** returns two Lwt_io.channel, one input one output *)
   let create_channels socket' =
     let open Lwt_io in
-    let* _ = Logs_lwt.debug (fun f -> f "Creating ic & oc") in
     let ic = of_fd ~mode:Input socket' in
     let oc = of_fd ~mode:Output socket' in
     Lwt.return (ic, oc)
@@ -77,7 +76,6 @@ module Protocol = struct
       the messagess length or the 'acknowldged' flag. If the prefix is not the flag and is 
       greater than zero then we read recursively until we have {prefix} bytes *)
   let read ?(client = false) input buf =
-    let* _ = Logs_lwt.debug (fun f -> f "Reading from connection. . .") in
     let read' () =
       Lwt_io.read_int32 input >>= function
       (* If we're in client-mode, check if prefix is the "acknowledged" flag *)
@@ -160,7 +158,7 @@ module Server = struct
           raise (Fatal "Client connection closed with an unknown error")
       (* This should never happen but is included for completeness *)
       | Error _unreachable ->
-          raise (Fatal "Server encountered an unknown fatal error")
+          raise (Fatal "Server encountered an unknown error")
       (* For everything else we recurse *)
       | _ -> listener' state ()
     in
@@ -197,11 +195,22 @@ module Client = struct
 
   (* Regular behavior, when started with the "--client" flag *)
 
+  (** Collects chars from a string_of_float until a non-zero digit is found *)
+  let take_first_nonzero s =
+    let rec take i acc =
+      if i >= String.length s then acc
+      else
+        match s.[i] with
+        | '1' .. '9' as digit -> acc ^ String.make 1 digit
+        | c -> take (succ i) (acc ^ String.make 1 c)
+    in
+    take 0 ""
+
   (** takes time (of sent messsage) and returns a formatted 
       string of the elapsd time*)
   let show_elapsed time =
     let elapsed = Unix.gettimeofday () -. time |> string_of_float in
-    Printf.sprintf " : %ss" (String.sub elapsed 0 5)
+    Printf.sprintf "> %ss" @@ take_first_nonzero elapsed
 
   (** The sender process, reads from stdin, awaits an 'ackowledged' message, 
       and then recurses. 
@@ -276,39 +285,50 @@ module Client = struct
   *)
 
   (* Size of buffer used for file sending *)
-  let chunk_size = 4096
+  let chunk_size = 1024
 
-  (** opens a file and creates a buffer, reading the file into the buffer 
-      until its full and then sending it to the server recursively until 
-      the whole file has been sent 
+  (** opens a file and creates a buffer, reading {chunks_size} bytes into the 
+      buffer and then sending them to the server  
 
       This is non-critical functionality I implemented to see if I could, 
       therefore it is perhaps not as robust as the regular functionality. 
-      Error handling could be improved 
-      *)
-  let send_file output path =
+      Error handling could be improved *)
+  let send_file input output path =
     let* fd = Lwt_unix.openfile path [ Unix.O_RDONLY ] 0 in
+    let* fsize = Lwt_unix.(stat path >|= fun stats -> stats.st_size) in
+    let num_chunks = fsize / chunk_size in
     let in_channel = Lwt_io.(of_fd ~mode:Input fd) in
     let buf = Bytes.create chunk_size in
-    let rec send_chunk () =
+    let start_time = Unix.gettimeofday () in
+    let rec send_chunk i =
       Lwt_io.read_into in_channel buf 0 chunk_size >>= function
       | 0 -> Lwt.return_unit
       | read ->
           let* _prefix = Lwt_io.write_int32 output @@ Int32.of_int read in
           let* _send = Lwt_io.write_from_exactly output buf 0 read in
-          send_chunk ()
+          (* Ensure we receive acknowledged flag as to not overload the server.
+             If we're on the last chunk print the total elapsed time once the
+             flag has been received *)
+          let* _ =
+            Lwt_io.read_int32 input >|= ignore
+            >>=
+            if i < num_chunks then Lwt.return
+            else fun () -> Lwt_io.printl (show_elapsed start_time)
+          in
+          send_chunk (succ i)
     in
-    send_chunk ()
+    send_chunk 0
 
   (** Creates output channel and sends file, catching and printing any exceptions *)
   let init_send_file address port path =
-    let* _, output = get_channels address port in
+    let* input, output = get_channels address port in
     let* _ =
       let open Util in
       Lwt.catch
-        (fun () -> send_file output path)
+        (fun () -> send_file input output path)
         (Printexc.to_string >> Lwt_io.eprintl)
     in
+    (* Cleanup *)
     Lwt_io.close output
 
   (** Entrypoint for file mode *)
