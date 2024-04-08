@@ -2,11 +2,22 @@ open Lwt
 open Syntax
 open OUnit
 open OUnitLwt
-module App = ChatApp.Connection
+module App = ChatApp.Chat
 module Util = ChatApp.Util
 module Args = ChatApp.Args
 
-let message = "Hello, Ahrefs!"
+let rand_string () =
+  let len = Random.int 192 + 64 in
+  let bytes = Bytes.create len in
+  for i = 0 to pred len do
+    Bytes.unsafe_set bytes i (Random.int 230 |> Char.chr)
+  done;
+  Bytes.unsafe_to_string bytes
+
+(* IO/Server tests *)
+
+let message = Bytes.of_string "Hello, Ahrefs!"
+let message_len = Bytes.length message
 
 let get_io () =
   let reader, writer = Lwt_unix.pipe () in
@@ -17,32 +28,83 @@ let get_io () =
 let read =
   "Test Protocol.read"
   >:: lwt_wrapper @@ fun _ ->
-      let buf = Bytes.create 1024 in
+      let buf = Bytes.create message_len in
 
       let input, output = get_io () in
 
-      let* _ =
-        Lwt_io.write_int32 output (Int32.of_int @@ String.length message)
-      in
-      let* _ = Lwt_io.write output message in
+      let* _ = Lwt_io.write_int32 output (Int32.of_int message_len) in
+      let* _ = Lwt_io.write_from output message 0 message_len in
       App.Protocol.read input buf >>= function
-      | Ok (Received msg) ->
-          let msg = String.of_bytes msg in
-          assert_equal msg message;
+      | Ok (Received len) ->
+          assert_equal ~cmp:Bytes.equal buf message;
+          assert_equal len message_len;
           Lwt.return_unit
       | _ -> assert_failure "Received something besides message sent"
 
-let write =
-  "Test Protocol.write"
+let read_fuzz =
+  "Test Protocol.read with large input of arbitrary bytes"
   >:: lwt_wrapper @@ fun _ ->
       let input, output = get_io () in
-      let* _ = App.Protocol.send output message >|= Result.get_ok in
+
+      let fuzz_len = 1024 * 32 in
+      let write_buf =
+        let b = Bytes.create fuzz_len in
+        for i = 0 to pred fuzz_len do
+          Bytes.set b i (Char.chr @@ Random.int 256)
+        done;
+        b
+      in
+
+      let read_buf = Bytes.create fuzz_len in
+      let* _ = Lwt_io.write_int32 output (Int32.of_int fuzz_len) in
+      let* _ = Lwt_io.write_from output write_buf 0 fuzz_len in
+      App.Protocol.read input read_buf >>= function
+      | Ok (Received len) ->
+          assert_equal len fuzz_len;
+          assert_equal ~cmp:Bytes.equal write_buf read_buf;
+          Lwt.return_unit
+      | _ -> assert_failure "Bytes altered in transit"
+
+let write =
+  "Test Protocol.send"
+  >:: lwt_wrapper @@ fun _ ->
+      let input, output = get_io () in
+      let* _ =
+        App.Protocol.send output (Int32.of_int message_len, message)
+        >|= Result.get_ok
+      in
       let* _ = Lwt_io.flush output in
 
+      let read_buf = Bytes.create message_len in
       let* count = Lwt_io.read_int32 input >|= Int32.to_int in
-      let* res = Lwt_io.read ~count input in
-      assert_equal count (String.length message);
-      assert_equal res message;
+      let* _ = Lwt_io.read_into input read_buf 0 message_len in
+      assert_equal count message_len;
+      assert_equal read_buf message;
+      Lwt.return_unit
+
+let write_fuzz =
+  "Test Protocol.send with large input of arbitrary bytes"
+  >:: lwt_wrapper @@ fun () ->
+      let input, output = get_io () in
+      let fuzz_len = 1024 * 32 in
+      let write_buf =
+        let b = Bytes.create fuzz_len in
+        for i = 0 to pred fuzz_len do
+          Bytes.set b i (Char.chr @@ Random.int 256)
+        done;
+        b
+      in
+
+      let* _ =
+        App.Protocol.send output (Int32.of_int fuzz_len, write_buf)
+        >|= Result.get_ok
+      in
+      let* _ = Lwt_io.flush output in
+      let read_buf = Bytes.create fuzz_len in
+      let* count = Lwt_io.read_int32 input in
+      let* _ = Lwt_io.read_into_exactly input read_buf 0 fuzz_len in
+      assert_equal count (Int32.of_int fuzz_len);
+      assert_equal ~cmp:Bytes.equal write_buf read_buf;
       Lwt.return_unit
 
 let acknowledged =
@@ -57,6 +119,19 @@ let acknowledged =
       assert_equal App.Acknowledged res;
       Lwt.return_unit
 
+let send_file =
+  "Test file sending"
+  >:: lwt_wrapper @@ fun () ->
+      let input, output = get_io () in
+      let path = "/etc/hosts" in
+      let* original = Lwt_io.(with_file ~mode:Input path read) in
+
+      let* _ = App.Client.send_file input output path in
+      let* res = Lwt_io.read ~count:(String.length original) input in
+      Lwt.return @@ assert_equal res original
+
+(* Arg parsing *)
+
 let validate_port =
   "Test Util.validate_port" >:: fun _ ->
   let valid = [ "8080"; "3000"; "80"; "443"; "4173"; "5173" ] in
@@ -67,7 +142,7 @@ let validate_port =
     [
       "0";
       "abcd";
-      "Unix.Unix_error (Unix.EUNKNOWNERR, \" \", \" \")";
+      "Lorem ipsum dolor sit amet, qui minim labore adipisicing minim sint";
       string_of_int Int.max_int;
     ]
   in
@@ -82,21 +157,14 @@ let validate_uri =
   let res = List.map Util.validate_uri valid in
   assert (List.for_all Result.is_ok res);
 
-  let fuzz =
-    let bytes = Bytes.create 128 in
-    for i = 0 to 127 do
-      Bytes.set_uint8 bytes i (Random.int 256)
-    done;
-    String.of_bytes bytes
-  in
   let invalid =
     [
-      "A long winding road";
+      "Camel Camel Camel";
       "0.0.0.0.0.0.0.0.0.0.0.0.0.0";
       "127.0.0.1:0";
       "ahrefs.com:F0o3aR";
       "0.0.0.0" ^ string_of_int Int.max_int;
-      fuzz;
+      rand_string ();
     ]
   in
   let res = List.map Util.validate_uri invalid in
@@ -104,30 +172,38 @@ let validate_uri =
 
 let parse_args =
   "Test Args.parse" >:: fun _ ->
-  assert_equal (Args.parse [ "--server"; "3000" ]) (Util.StartServer 3000);
-  assert_equal (Args.parse [ "--server" ]) (Util.StartServer 8080);
+  assert_equal
+    (Args.parse [ "--server"; "3000" ])
+    (Result.ok @@ Util.StartServer 3000);
+  assert_equal (Args.parse [ "--server" ]) (Result.ok @@ Util.StartServer 8080);
   assert_equal
     (Args.parse [ "--client" ])
-    (Util.StartClient (Unix.inet_addr_loopback, 8080));
+    (Result.ok @@ Util.StartClient (Unix.inet_addr_loopback, 8080));
   assert_equal
     (Args.parse [ "--client"; "127.0.0.1:8080" ])
-    (Util.StartClient (Unix.inet_addr_loopback, 8080));
+    (Result.ok @@ Util.StartClient (Unix.inet_addr_loopback, 8080));
   assert_equal
     (Args.parse [ "--client"; "127.0.0.1:8080"; "--file"; "/dev/null" ])
-    (Util.SendFile (Unix.inet_addr_loopback, 8080, "/dev/null"));
-  let try_parse arg_list =
-    assert (
-      try
-        Args.parse arg_list |> ignore;
-        false
-      with Args.ParseError _ -> true)
-  in
+    (Result.ok @@ Util.SendFile (Unix.inet_addr_loopback, 8080, "/dev/null"));
+  let try_parse arg_list = assert (Result.is_error @@ Args.parse arg_list) in
   try_parse [];
   try_parse [ ""; ""; ""; "" ];
-  try_parse [ "password:"; "hunter2" ]
+  try_parse [ "password:"; "hunter2" ];
+  let open Util in
+  try_parse @@ List.init 4 (ignore >> rand_string)
 
 let suite =
   "Chat app tests"
-  >::: [ read; write; acknowledged; validate_port; validate_uri; parse_args ]
+  >::: [
+         read;
+         write;
+         acknowledged;
+         send_file;
+         validate_port;
+         validate_uri;
+         parse_args;
+         read_fuzz;
+         write_fuzz;
+       ]
 
 let _ = OUnit.run_test_tt_main suite

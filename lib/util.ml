@@ -1,10 +1,7 @@
 type init =
-  | StartServer of port
-  | StartClient of (Unix.inet_addr * port)
-  | SendFile of (Unix.inet_addr * port * path)
-
-and port = int
-and path = string
+  | StartServer of int
+  | StartClient of (Unix.inet_addr * int)
+  | SendFile of (Unix.inet_addr * int * string)
 
 let default_address = Unix.inet_addr_loopback
 let default_port = 8080

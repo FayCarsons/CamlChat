@@ -9,6 +9,12 @@
 (package
  (name ChatApp)
  (synopsis "Simple one-on-one socket chat app")
- (depends ocaml dune lwt ounit2 ounit2-lwt uri)
+ (depends 
+   (ocaml (= "5.1.1")) 
+   dune 
+   (lwt (= "5.7.0")) 
+   (ounit2 (= "2.2.7")) 
+   (ounit2-lwt (= "2.2.7")) 
+   (uri (= "4.4.0")))
  (tags
   (topics TCP CLI Network)))

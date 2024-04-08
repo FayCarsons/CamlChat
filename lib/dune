@@ -1,4 +1,6 @@
 (library
  (name ChatApp)
- (preprocess (pps lwt_ppx))
- (libraries lwt lwt.unix uri))
+ (preprocess
+  (pps lwt_ppx))
+ (wrapped false)
+ (libraries base lwt lwt.unix uri))

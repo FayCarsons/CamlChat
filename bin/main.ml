@@ -1,10 +1,12 @@
-open ChatApp
 open Util
-module Server = Connection.Server
-module Client = Connection.Client
+module Server = Chat.Server
+module Client = Chat.Client
 
 let () =
   match Args.get_args () with
-  | StartServer port -> Server.start port
-  | StartClient (address, port) -> Client.start address port
-  | SendFile (address, port, path) -> Client.start_file address port path
+  | Ok (StartServer port) -> Server.start port
+  | Ok (StartClient (address, port)) -> Client.start address port
+  | Ok (SendFile (address, port, path)) -> Client.start_file address port path
+  | Error e ->
+      print_endline e;
+      exit 0
