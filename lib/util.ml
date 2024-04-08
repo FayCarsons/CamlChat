@@ -13,15 +13,13 @@ let port_in_range = function
   | n when 0 < n && n <= 65535 -> Ok n
   | _ -> Error "Port not in valid range"
 
-(** Checks that port string is integer and in range of useable ports. 
-    Ideally would check if port is open, bu implementing this introduces
-    unpredictable behavior wrt port binding in app *)
+(** Checks that port string is integer and in range of useable ports. *)
 let validate_port maybe_port =
   int_of_string_opt maybe_port
   |> Option.to_result ~none:"Port is not an integer"
   |> Fun.flip Result.bind port_in_range
 
-(** Checks that uri contains either a valid inet_adress or hostname *)
+(** Checks that URI contains either a valid inet_adress or hostname *)
 let validate_uri uri_str =
   try
     let maybe_uri = Uri.of_string @@ "//" ^ uri_str in
