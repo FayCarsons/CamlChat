@@ -1,0 +1,8 @@
+lib: [
+  "_build/install/default/lib/ChatApp/META"
+  "_build/install/default/lib/ChatApp/dune-package"
+  "_build/install/default/lib/ChatApp/opam"
+]
+bin: [
+  "_build/install/default/bin/ChatApp"
+]

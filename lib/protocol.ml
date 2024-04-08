@@ -25,8 +25,6 @@ type event =
 exception Fatal of string
 (** raised when we encounter an error we cannot recover from *)
 
-(** Mode agnostic IO functions, initializers, and constants describing the protocol the app uses *)
-
 (** Number of bytes in the message's prefix,
       which is either an "Acknowledged" flag or the length of the following message *)
 let prefix_bytes = 4
@@ -72,14 +70,17 @@ let io_loop io_fn len =
 (**  Writes len to the output channel, and then recursively writes 
       bytes *)
 let send output (len, bytes) =
-  Lwt_io.write_int32 output len >>= fun () ->
+  let* _ = Lwt_io.write_int32 output len in
   io_loop (Lwt_io.write_from output bytes) (Int32.to_int len)
 
 (** reads from the input channel, first attempting to get a 'prefix' representing either 
       the messagess length or the 'acknowldged' flag. If the prefix is not the flag and is 
       greater than zero then we read recursively until we've read {prefix} bytes. 
 
-      Returns an event describing the result of this operation. *)
+      Returns an event describing the result of this operation. 
+
+      @param client 
+      determines whether or not we check for the `acknowledged` flag in the prefix *)
 let read ?(client = false) input buf =
   let read' () =
     Lwt_io.read_int32 input >>= function

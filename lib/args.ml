@@ -4,9 +4,9 @@ let usage =
   {|[ --client ] with optional ipv4 address
 [ --file ] with a path value (only available in client mode)
 [ --server ] with optional port
-[ --help ] prints this message|}
+[ --help ] prints usage|}
 
-(* We don't have many options so simply match on all valid combinations *)
+(* We don't have many options so simply match on all supported combinations *)
 let parse = function
   | [ "--help" ] ->
       print_endline usage;
@@ -30,7 +30,7 @@ let parse = function
   | _ ->
       Error
         (Printf.sprintf
-           "Received unknown or malformed arguments.\nExpected:\n%s" usage)
+           "Received unknown or malformed arguments.\nExpected:\n\n%s\n" usage)
 
 let get_args () =
   let args = List.tl @@ Array.to_list Sys.argv in

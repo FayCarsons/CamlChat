@@ -1,5 +1,6 @@
-(** Client and Server mode implementation. Both follow a simple pattern with a 
-    recursive 'task' for both sending and listening for messages. *)
+(** Client and Server mode implementation. Both follow the same simple pattern 
+    with separate recursive `tasks` that can asynchronously communicate with 
+    each other for sending and listening for messages *)
 
 open Lwt
 open Syntax
@@ -10,7 +11,7 @@ module Char = Base.Char
 type connection = {
   input : Lwt_io.input_channel;
   output : Lwt_io.output_channel;
-  buf : Bytes.t;  (** Buffer that received bytes are read into *)
+  buf : Bytes.t;  (** Buffer that bytes are read into *)
   mailbox : Protocol.event Lwt_mvar.t;
       (** Mailbox used to communicate between processes *)
 }
@@ -20,25 +21,25 @@ type connection = {
      behavior of the console 
 
      Allow newlines, prinable chars, carriage return, and tab only *)
-let sanitize (s : string) =
+let sanitize s =
   let is_valid = function
     | '\x20' .. '\x7E' | '\x0A' | '\x0D' | '\x09' -> true
     | _ -> false
   in
   String.filter ~f:is_valid s
 
-(** Server/host mode listener, sender, initialization and helper functions *)
+(** Server mode *)
 module Server = struct
   open Protocol
 
-  (* We only want to allow one client connection at a time *)
+  (** We only want to allow one client connection at a time *)
   let backlog = 1
 
   (** Concurrently checks our mailbox for messages that 
-      signal changes in state and listens to stdin for messages. 
+      signal changes in state, and listens to stdin for messages. 
 
-      We call Lwt.pick on these processes so that if one resolves (typically `check_mail`)
-      we can recurse with the new state it receives *)
+      We call Lwt.pick on these processes so that if one resolves (ideally 
+      `check_mail`) we can recurse with the new state it receives *)
   let rec send_loop ({ output; mailbox; _ } as state) =
     let rec check_mail () =
       Lwt_mvar.take mailbox >>= function
@@ -59,9 +60,10 @@ module Server = struct
     Lwt.pick [ check_mail (); read_stdin () ] >>= fun state -> send_loop state
 
   (** Waits for a new client connecion and converts the returned file descriptor
-      to an input+output channel tuple *)
+      to input+output channels *)
   let wait_for_client sock = Lwt_unix.accept sock >|= fst >>= create_channels
 
+  (** Messages sender, waits for a new client, and reinitializes state *)
   let reinitialize sock state =
     let* _ = Lwt_mvar.put state.mailbox Closed in
     let* input, output = wait_for_client sock in
@@ -69,8 +71,8 @@ module Server = struct
     let* _ = Lwt_mvar.put new_state.mailbox @@ New (input, output) in
     Lwt.return new_state
 
-  (** Reads from connection recursively and handles IO, message passing, and 
-      type casting according to the variant received *)
+  (** Reads from connection recursively and handles IO and control flow according 
+      to what it receives *)
   let listen_loop (sock, state) =
     let rec listener ({ input; output; buf; _ } as state) () =
       read input buf >>= function
@@ -96,15 +98,15 @@ module Server = struct
           let* new_state = reinitialize sock state in
           let* _ = Lwt_io.printl "Accepted connection from new client" in
           listener new_state ()
-      (* This should never happen, but is included for completeness sake *)
+      (* This should never happen, but is included for completeness *)
       | Error _unreachable ->
           raise (Fatal "Server encountered an unknown error")
-      (* For everything else we recurse *)
+      (* For anything else we recurse *)
       | _ -> listener state ()
     in
     listener state ()
 
-  (** Binds a socket to an address, sets it up for listening and returns the socket *)
+  (** Binds a socket to an address and sets it up for listening  *)
   let bind_socket port fd =
     let open Lwt_unix in
     let _ =
@@ -137,23 +139,23 @@ module Server = struct
   let start port = Lwt_main.run @@ init port
 end
 
-(** Client listener/sender functionality and helper fns *)
+(** Client mode *)
 module Client = struct
   open Protocol
 
   (* Regular behavior, when started with the "--client" flag *)
 
-  (** takes time (of sent messsage) and returns a formatted 
-      string of the elapsd time*)
+  (** Takes time (of sent messsage) and returns a formatted 
+      string of the elapsed time*)
   let show_elapsed time =
     let elapsed = Unix.gettimeofday () -. time |> string_of_float in
     Printf.sprintf "> %ss" @@ String.sub elapsed ~pos:0 ~len:6
 
-  (** Reads from stdin, awaits an 'ackowledged' message, 
+  (** Reads from stdin, awaits an 'acknowledged' message, 
       and then recurses. 
 
-      Unlike the server-mode sender, we don't need to restart with new state 
-      when the connection is closed so this can be done in sequence *)
+      Unlike the server mode sender, we don't need to restart with new state 
+      when the connection is closed, so this can be done in sequence *)
   let send_loop state =
     let rec sender' ({ output; mailbox; _ } as state) () =
       Lwt_io.(read_line_opt stdin) >>= function
@@ -171,13 +173,12 @@ module Client = struct
     in
     sender' state ()
 
-  (**  Reads from connection recursively until it is closed. 
+  (** Reads from connection recursively until it is closed. 
       If the 'acknowledged' flag is received we forward it to the sender so it 
       can display the elapsed time. 
 
       Because we cannot know the state of the server we raise a fatal error if 
-      the read reads 0 bytes when more were expected (`Error Closed` is only 
-      returned in this case) *)
+      we receive 0 bytes when more were expected *)
   let listen_loop state =
     let rec listener' ({ input; buf; mailbox; _ } as state) () =
       read ~client:true input buf >>= function
@@ -186,41 +187,40 @@ module Client = struct
           let msg = Bytes.To_string.sub buf ~pos:0 ~len |> sanitize in
           Lwt_io.printl msg >>= listener' state
       | Ok Closed -> Lwt_io.printl "Server closed connection" >>= Lwt.return
-      (* If the server closes in an error state, we don't have a way to recover *)
       | Error Closed ->
           raise (Fatal "Server connection closed with unknown error")
       | _ -> listener' state ()
     in
     listener' state ()
 
-  (** initializes a socket, connects to server, and 
-      returns an input and output channel for that connection *)
-  let get_channels addr port =
+  (** Initializes a socket, connects to server, and 
+      returns an input + output channel *)
+  let create_socket addr port =
     let sockaddr = Lwt_unix.ADDR_INET (addr, port) in
     let fd = Lwt_unix.socket PF_INET SOCK_STREAM 0 in
-    let _ =
-      try%lwt Lwt_unix.connect fd sockaddr
+    let* _ =
+      try%lwt
+        let* _ = Lwt_unix.connect fd sockaddr in
+        Lwt_io.printl "Connected!"
       with _ ->
         Lwt_io.eprintl
         @@ Printf.sprintf "Cannot connect to server %s:%d"
              (Unix.string_of_inet_addr addr)
              port
     in
-    let* _ = Lwt_io.printl "Connected!" in
-    create_channels fd
+    Lwt.return fd
 
-  (** connects to server and creates initial state then starts listener 
+  (** Connects to server and creates initial state then starts listener 
       and sender processses *)
   let init address port =
     let* _ = Lwt_io.printl "Connecting to server..\nType 'quit' to exit\n" in
-    let* input, output = get_channels address port in
+    let* input, output = create_socket address port >>= create_channels in
     let mailbox = Lwt_mvar.create_empty () in
     let buf = Bytes.create buffer_size in
     let state = { input; output; mailbox; buf } in
     (* Use Lwt.pick so that the program shuts down when the connection is
        closed, use try%lwt to pass any exceptions up the call stack *)
-    try%lwt Lwt.pick [ listen_loop state; send_loop state ]
-    with e -> Lwt.reraise e
+    Lwt.pick [ listen_loop state; send_loop state ]
 
   (** Entrypoint *)
   let start address port = Lwt_main.run @@ init address port
@@ -259,29 +259,25 @@ module Client = struct
           (* Ensure we receive acknowledged flag as to not overload the server.
              If we're on the last chunk print the total elapsed time once the
              flag has been received *)
+          let* _ = Lwt_io.read_int32 input in
           let* _ =
-            Lwt_io.read_int32 input >|= ignore
-            >>=
-            if i < num_chunks then Lwt.return
-            else fun () -> Lwt_io.printl (show_elapsed start_time)
+            if i = num_chunks then Lwt_io.printl @@ show_elapsed start_time
+            else Lwt.return_unit
           in
           send_chunk (succ i)
     in
     send_chunk 0
 
-  (** Creates output channel and sends file, catching and printing any exceptions *)
+  (** Creates output channel and sends file, catching and printing any 
+      exceptions, then closes connection *)
   let init_send_file address port path =
-    let* input, output = get_channels address port in
-    let* _ =
-      let open Util in
-      Lwt.catch
-        (fun () -> send_file input output path)
-        (Printexc.to_string >> Lwt_io.eprintl)
-    in
-    (* Cleanup *)
-    Lwt_io.close output
+    try%lwt
+      let* input, output = create_socket address port >>= create_channels in
+      let* _ = send_file input output path in
+      Lwt_io.close output
+    with e -> Lwt_io.eprintl @@ Printexc.to_string e
 
   (** Entrypoint for file mode *)
   let start_file address port path =
-    Lwt_main.run (init_send_file address port path)
+    Lwt_main.run @@ init_send_file address port path
 end

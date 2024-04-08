@@ -2,9 +2,6 @@ open Lwt
 open Syntax
 open OUnit
 open OUnitLwt
-module App = ChatApp.Chat
-module Util = ChatApp.Util
-module Args = ChatApp.Args
 
 let rand_string () =
   let len = Random.int 192 + 64 in
@@ -34,7 +31,7 @@ let read =
 
       let* _ = Lwt_io.write_int32 output (Int32.of_int message_len) in
       let* _ = Lwt_io.write_from output message 0 message_len in
-      App.Protocol.read input buf >>= function
+      Protocol.read input buf >>= function
       | Ok (Received len) ->
           assert_equal ~cmp:Bytes.equal buf message;
           assert_equal len message_len;
@@ -58,7 +55,7 @@ let read_fuzz =
       let read_buf = Bytes.create fuzz_len in
       let* _ = Lwt_io.write_int32 output (Int32.of_int fuzz_len) in
       let* _ = Lwt_io.write_from output write_buf 0 fuzz_len in
-      App.Protocol.read input read_buf >>= function
+      Protocol.read input read_buf >>= function
       | Ok (Received len) ->
           assert_equal len fuzz_len;
           assert_equal ~cmp:Bytes.equal write_buf read_buf;
@@ -70,7 +67,7 @@ let write =
   >:: lwt_wrapper @@ fun _ ->
       let input, output = get_io () in
       let* _ =
-        App.Protocol.send output (Int32.of_int message_len, message)
+        Protocol.send output (Int32.of_int message_len, message)
         >|= Result.get_ok
       in
       let* _ = Lwt_io.flush output in
@@ -96,7 +93,7 @@ let write_fuzz =
       in
 
       let* _ =
-        App.Protocol.send output (Int32.of_int fuzz_len, write_buf)
+        Protocol.send output (Int32.of_int fuzz_len, write_buf)
         >|= Result.get_ok
       in
       let* _ = Lwt_io.flush output in
@@ -115,8 +112,8 @@ let acknowledged =
       let* _ = Lwt_io.write_int32 output 0xBEEFCAFEl in
       let* _ = Lwt_io.flush output in
 
-      App.Protocol.read input buf ~client:true >|= Result.get_ok >>= fun res ->
-      assert_equal App.Acknowledged res;
+      Protocol.read input buf ~client:true >|= Result.get_ok >>= fun res ->
+      assert_equal Protocol.Acknowledged res;
       Lwt.return_unit
 
 let send_file =
@@ -126,7 +123,7 @@ let send_file =
       let path = "/etc/hosts" in
       let* original = Lwt_io.(with_file ~mode:Input path read) in
 
-      let* _ = App.Client.send_file input output path in
+      let* _ = Chat.Client.send_file input output path in
       let* res = Lwt_io.read ~count:(String.length original) input in
       Lwt.return @@ assert_equal res original
 
