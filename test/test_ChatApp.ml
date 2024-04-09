@@ -116,17 +116,6 @@ let acknowledged =
       assert_equal Protocol.Acknowledged res;
       Lwt.return_unit
 
-let send_file =
-  "Test file sending"
-  >:: lwt_wrapper @@ fun () ->
-      let input, output = get_io () in
-      let path = "/etc/hosts" in
-      let* original = Lwt_io.(with_file ~mode:Input path read) in
-
-      let* _ = Chat.Client.send_file input output path in
-      let* res = Lwt_io.read ~count:(String.length original) input in
-      Lwt.return @@ assert_equal res original
-
 (* Arg parsing *)
 
 let validate_port =
@@ -179,9 +168,6 @@ let parse_args =
   assert_equal
     (Args.parse [ "--client"; "127.0.0.1:8080" ])
     (Result.ok @@ Util.StartClient (Unix.inet_addr_loopback, 8080));
-  assert_equal
-    (Args.parse [ "--client"; "127.0.0.1:8080"; "--file"; "/dev/null" ])
-    (Result.ok @@ Util.SendFile (Unix.inet_addr_loopback, 8080, "/dev/null"));
   let try_parse arg_list = assert (Result.is_error @@ Args.parse arg_list) in
   try_parse [];
   try_parse [ ""; ""; ""; "" ];
@@ -195,7 +181,6 @@ let suite =
          read;
          write;
          acknowledged;
-         send_file;
          validate_port;
          validate_uri;
          parse_args;

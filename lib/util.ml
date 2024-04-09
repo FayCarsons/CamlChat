@@ -1,7 +1,4 @@
-type init =
-  | StartServer of int
-  | StartClient of (Unix.inet_addr * int)
-  | SendFile of (Unix.inet_addr * int * string)
+type init = StartServer of int | StartClient of (Unix.inet_addr * int)
 
 let default_address = Unix.inet_addr_loopback
 let default_port = 8080
@@ -33,12 +30,3 @@ let validate_uri uri_str =
   with Unix.Unix_error (msg, _, _) ->
     Result.error
     @@ Printf.sprintf "Invalid address/hostname: %s" (Unix.error_message msg)
-
-(** Checks that file exists and process has permission access it *)
-let validate_path path =
-  if Sys.file_exists path then
-    try
-      Unix.access path [ Unix.R_OK ];
-      Ok path
-    with Unix.Unix_error (err, _, _) -> Result.error @@ Unix.error_message err
-  else Result.error @@ Printf.sprintf "Cannot find file: %s" path

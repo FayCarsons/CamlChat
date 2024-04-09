@@ -6,3 +6,6 @@ lib: [
 bin: [
   "_build/install/default/bin/ChatApp"
 ]
+doc: [
+  "_build/install/default/doc/ChatApp/README.md"
+]

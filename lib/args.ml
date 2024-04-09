@@ -3,7 +3,6 @@ open Util
 let usage =
   {|[ --server ] with optional port
 [ --client ] with optional ipv4 address & port
-[ --file ] with a path value (only available in client mode, and requires ipv4 & port)
 [ --help ] prints usage|}
 
 (* We don't have many options so simply match on all supported combinations.
@@ -18,15 +17,6 @@ let parse = function
       match validate_uri addr with
       | Ok (addr, port) -> Result.ok @@ StartClient (addr, port)
       | Error e -> Error (Printf.sprintf "Invalid address/hostname: %s " e))
-  | [ "--client"; addr; "--file"; path ] | [ "--file"; path; "--client"; addr ]
-    -> (
-      match (validate_uri addr, validate_path path) with
-      | Ok (addr, port), Ok path -> Result.ok @@ SendFile (addr, port, path)
-      | Error err, _ -> Error (Printf.sprintf "Malformed URI: %s" err)
-      | _, Error err -> Error (Printf.sprintf "Invalid file path: %s" err))
-  | [ "--client"; "--file"; path ] | [ "file"; path; "--client" ] ->
-      validate_path path
-      |> Result.map (fun path -> SendFile (default_address, default_port, path))
   | [ "--server"; port ] -> (
       match validate_port port with
       | Ok port -> Result.ok @@ StartServer port

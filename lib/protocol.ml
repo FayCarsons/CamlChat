@@ -32,9 +32,6 @@ let prefix_bytes = 4
 (** The four bytes the server sends to the client when a message is received *)
 let acknowledged = 0xBEEFCAFEl
 
-(** Size of read buffer *)
-let buffer_size = 1024 * 50
-
 (* Creates a stream socket *)
 let create_socket () = Lwt_unix.(socket PF_INET SOCK_STREAM 0)
 

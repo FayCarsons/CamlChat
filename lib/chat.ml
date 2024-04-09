@@ -17,10 +17,13 @@ type connection = {
 }
 (** Application state *)
 
-(** Filters strings so they may be displayed without affecting the 
-     behavior of the console 
+(** Size of read buffer *)
+let buffer_size = 1024 * 50
 
-     Allow newlines, prinable chars, carriage return, and tab only *)
+(** Filters strings so they may be displayed without affecting the 
+    behavior of the console 
+
+    Allow newlines, prinable chars, carriage return, and tab only *)
 let sanitize s =
   let is_valid = function
     | '\x20' .. '\x7E' | '\x0A' | '\x0D' | '\x09' -> true
@@ -35,11 +38,11 @@ module Server = struct
   (** We only want to allow one client connection at a time *)
   let backlog = 1
 
-  (** Concurrently checks our mailbox for messages that 
+  (** Concurrently checks the mailbox for messages that 
       signal changes in state, and listens to stdin for messages. 
 
-      We call Lwt.pick on these processes so that if one resolves (ideally 
-      `check_mail`) we can recurse with the new state it receives *)
+      We call Lwt.pick on these processes so that if one resolves (`check_mail`
+      if no errors have occured) we can recurse with the new state it receives *)
   let rec send_loop ({ output; mailbox; _ } as state) =
     let rec check_mail () =
       Lwt_mvar.take mailbox >>= function
@@ -61,14 +64,12 @@ module Server = struct
     | Some state -> send_loop state
     | None -> Lwt.return_unit
 
-  (** Waits for a new client connecion and converts the returned file descriptor
-      to input+output channels *)
-  let wait_for_client sock = Lwt_unix.accept sock >|= fst >>= create_channels
-
   (** Messages sender, waits for a new client, and reinitializes state *)
   let reinitialize sock state =
     let* _ = Lwt_mvar.put state.mailbox Closed in
-    let* input, output = wait_for_client sock in
+    let* input, output =
+      Lwt.map fst (Lwt_unix.accept sock) >>= create_channels
+    in
     let new_state = { state with input; output } in
     let* _ = Lwt_mvar.put new_state.mailbox @@ New (input, output) in
     Lwt.return new_state
@@ -226,60 +227,4 @@ module Client = struct
 
   (** Entrypoint *)
   let start address port = Lwt_main.run @@ init address port
-
-  (*
-      <File sending mode>
-
-      Used when started in client mode with the "--file" flag,
-      sends a file, immediately closes the connection and exits
-  *)
-
-  (* Size of buffer used *)
-  let chunk_size = 1024
-
-  (** opens a file and creates a buffer, reading {chunks_size} bytes into the 
-      buffer and then sending them to the server  
-
-      This is non-critical functionality I implemented to see if I could, 
-      therefore it is perhaps not as robust as the regular functionality. 
-      Error handling could be improved *)
-  let send_file input output path =
-    (* Initialization *)
-    let* fd = Lwt_unix.openfile path [ Unix.O_RDONLY ] 0 in
-    let* fsize = Lwt_unix.(stat path >|= fun stats -> stats.st_size) in
-    let num_chunks = fsize / chunk_size in
-    let file_in = Lwt_io.(of_fd ~mode:Input fd) in
-    let buf = Bytes.create chunk_size in
-    let start_time = Unix.gettimeofday () in
-    (* Send file in chunks *)
-    let rec send_chunk i =
-      Lwt_io.read_into file_in buf 0 chunk_size >>= function
-      | 0 -> Lwt.return_unit (* EOF *)
-      | read ->
-          let* _prefix = Lwt_io.write_int32 output @@ Int32.of_int read in
-          let* _send = Lwt_io.write_from_exactly output buf 0 read in
-          (* Ensure we receive acknowledged flag as to not overload the server.
-             If we're on the last chunk print the total elapsed time once the
-             flag has been received *)
-          let* _ = Lwt_io.read_int32 input in
-          let* _ =
-            if i = num_chunks then Lwt_io.printl @@ show_elapsed start_time
-            else Lwt.return_unit
-          in
-          send_chunk (succ i)
-    in
-    send_chunk 0
-
-  (** Creates output channel and sends file, catching and printing any 
-      exceptions, then closes connection *)
-  let init_send_file address port path =
-    try%lwt
-      let* input, output = create_socket address port >>= create_channels in
-      let* _ = send_file input output path in
-      Lwt_io.close output
-    with e -> Lwt_io.eprintl @@ Printexc.to_string e
-
-  (** Entrypoint for file mode *)
-  let start_file address port path =
-    Lwt_main.run @@ init_send_file address port path
 end
