@@ -44,20 +44,22 @@ module Server = struct
     let rec check_mail () =
       Lwt_mvar.take mailbox >>= function
       | Closed -> check_mail ()
-      | New (input, output) -> Lwt.return { state with input; output }
+      | New (input, output) -> Lwt.return_some { state with input; output }
       | _unreachable ->
           Lwt_io.eprintl "Internal error: program entered unreachable branch"
-          >>= fun () -> Lwt.return state
+          >>= fun () -> Lwt.return_some state
     in
     let rec read_stdin () =
       Lwt_io.(read_line_opt stdin) >>= function
-      | Some "quit" -> exit 0
+      | Some "quit" -> Lwt.return_none
       | Some msg ->
           let* _ = serialize msg |> send output in
           read_stdin ()
       | None -> raise (Fatal "Stdin closed unexpectedly")
     in
-    Lwt.pick [ check_mail (); read_stdin () ] >>= fun state -> send_loop state
+    Lwt.pick [ check_mail (); read_stdin () ] >>= function
+    | Some state -> send_loop state
+    | None -> Lwt.return_unit
 
   (** Waits for a new client connecion and converts the returned file descriptor
       to input+output channels *)
@@ -133,7 +135,7 @@ module Server = struct
     let buf = Bytes.create buffer_size in
     let state = { input; output; mailbox; buf } in
     try%lwt Lwt.pick [ send_loop state; listen_loop (sock, state) ]
-    with e -> Lwt_unix.close sock >>= Lwt.reraise e
+    with e -> Lwt_unix.close sock >>= raise e
 
   (** Entrypoint *)
   let start port = Lwt_main.run @@ init port

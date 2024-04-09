@@ -1,9 +1,9 @@
 open Util
 
 let usage =
-  {|[ --client ] with optional ipv4 address & port
+  {|[ --server ] with optional port
+[ --client ] with optional ipv4 address & port
 [ --file ] with a path value (only available in client mode, and requires ipv4 & port)
-[ --server ] with optional port
 [ --help ] prints usage|}
 
 (* We don't have many options so simply match on all supported combinations.
