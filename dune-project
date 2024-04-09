@@ -1,13 +1,13 @@
 (lang dune 3.14)
 
-(name ChatApp)
+(name camlchat)
 
 (generate_opam_files true)
 
 (authors "Fay Carsons")
 
 (package
- (name ChatApp)
+ (name camlchat)
  (synopsis "Simple one-on-one socket chat app")
  (depends 
    (ocaml (>= "5.1.1")) 
