@@ -8,4 +8,4 @@ let () =
   | Ok (StartClient (address, port)) -> Client.start address port
   | Error e ->
       print_endline e;
-      exit 0
+      exit 1

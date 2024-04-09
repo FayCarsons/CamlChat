@@ -1,5 +1,5 @@
 (test
- (name test_ChatApp)
+ (name test_camlchat)
  (preprocess
   (pps lwt_ppx))
- (libraries ChatApp lwt lwt.unix ounit2 ounit2-lwt))
+ (libraries camlchat lwt lwt.unix ounit2 ounit2-lwt))

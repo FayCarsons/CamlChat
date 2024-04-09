@@ -16,7 +16,7 @@ let validate_port maybe_port =
   |> Option.to_result ~none:"Port is not an integer"
   |> Fun.flip Result.bind port_in_range
 
-(** Checks that URI contains either a valid inet_adress or hostname *)
+(** Checks that URI contains a valid hostname+port *)
 let validate_uri uri_str =
   try
     let maybe_uri = Uri.of_string @@ "//" ^ uri_str in

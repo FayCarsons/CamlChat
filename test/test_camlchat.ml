@@ -66,10 +66,7 @@ let write =
   "Test Protocol.send"
   >:: lwt_wrapper @@ fun _ ->
       let input, output = get_io () in
-      let* _ =
-        Protocol.send output (Int32.of_int message_len, message)
-        >|= Result.get_ok
-      in
+      let* _ = Protocol.send output (message_len, message) >|= Result.get_ok in
       let* _ = Lwt_io.flush output in
 
       let read_buf = Bytes.create message_len in
@@ -92,10 +89,7 @@ let write_fuzz =
         b
       in
 
-      let* _ =
-        Protocol.send output (Int32.of_int fuzz_len, write_buf)
-        >|= Result.get_ok
-      in
+      let* _ = Protocol.send output (fuzz_len, write_buf) >|= Result.get_ok in
       let* _ = Lwt_io.flush output in
       let read_buf = Bytes.create fuzz_len in
       let* count = Lwt_io.read_int32 input in

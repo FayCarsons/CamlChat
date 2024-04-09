@@ -1,5 +1,5 @@
 (library
- (name ChatApp)
+ (name camlchat)
  (preprocess
   (pps lwt_ppx))
  (wrapped false)

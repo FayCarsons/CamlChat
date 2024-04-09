@@ -13,7 +13,7 @@ type connection = {
   output : Lwt_io.output_channel;
   buf : Bytes.t;  (** Buffer that bytes are read into *)
   mailbox : Protocol.event Lwt_mvar.t;
-      (** Mailbox used to communicate between processes *)
+      (** Mailbox used to communicate between tasks *)
 }
 (** Application state *)
 
@@ -31,7 +31,6 @@ let sanitize s =
   in
   String.filter ~f:is_valid s
 
-(** Server mode *)
 module Server = struct
   open Protocol
 
@@ -74,18 +73,15 @@ module Server = struct
     let* _ = Lwt_mvar.put new_state.mailbox @@ New (input, output) in
     Lwt.return new_state
 
-  (** Reads from connection recursively and handles IO and control flow according 
-      to what it receives *)
+  (** Reads from connection and handles IO and control flow *)
   let listen_loop (sock, state) =
     let rec listener ({ input; output; buf; _ } as state) () =
       read input buf >>= function
-      (* A normal message *)
       | Ok (Received len) ->
           let* _ = Lwt_io.write_int32 output acknowledged in
           let msg = Bytes.To_string.sub buf ~pos:0 ~len |> sanitize in
           let msg = sanitize msg in
           Lwt_io.printl msg >>= listener state
-      (* Closed in an acceptable state *)
       | Ok Closed ->
           let* _ =
             Lwt_io.printl "Client closed connection, listening for another. . ."
@@ -93,7 +89,6 @@ module Server = struct
           let* new_state = reinitialize sock state in
           let* _ = Lwt_io.printl "Accepted connection from new client!" in
           listener new_state ()
-      (* Closed in an error state *)
       | Error Closed ->
           let* _ =
             Lwt_io.eprintl "Client connection closed with an unknown error"
@@ -109,7 +104,6 @@ module Server = struct
     in
     listener state ()
 
-  (** Binds a socket to an address and sets it up for listening  *)
   let bind_socket port fd =
     let open Lwt_unix in
     let _ =
@@ -128,7 +122,7 @@ module Server = struct
       Lwt_io.printl
       @@ Printf.sprintf "Starting server on port %d\nType 'quit' to exit\n" port
     in
-    let* sock = create_socket () |> bind_socket port in
+    let* sock = Lwt_unix.(socket PF_INET SOCK_STREAM 0) |> bind_socket port in
     let* client, _sockaddr = Lwt_unix.accept sock in
     let* _ = Lwt_io.printl "Accepted connection from client!" in
     let* input, output = create_channels client in
@@ -142,14 +136,11 @@ module Server = struct
   let start port = Lwt_main.run @@ init port
 end
 
-(** Client mode *)
 module Client = struct
   open Protocol
 
-  (* Regular behavior, when started with the "--client" flag *)
-
   (** Takes time (of sent messsage) and returns a formatted 
-      string of the elapsed time*)
+      string of the elapsed time *)
   let show_elapsed time =
     let elapsed = Unix.gettimeofday () -. time |> string_of_float in
     Printf.sprintf "> %ss" @@ String.sub elapsed ~pos:0 ~len:6
@@ -176,7 +167,7 @@ module Client = struct
     in
     sender' state ()
 
-  (** Reads from connection recursively until it is closed. 
+  (** Reads from connection until it is closed. 
       If the 'acknowledged' flag is received we forward it to the sender so it 
       can display the elapsed time. 
 
@@ -196,33 +187,29 @@ module Client = struct
     in
     listener' state ()
 
-  (** Initializes a socket, connects to server, and 
-      returns an input + output channel *)
   let create_socket addr port =
     let sockaddr = Lwt_unix.ADDR_INET (addr, port) in
     let fd = Lwt_unix.socket PF_INET SOCK_STREAM 0 in
-    let* _ =
-      try%lwt
-        let* _ = Lwt_unix.connect fd sockaddr in
-        Lwt_io.printl "Connected!"
-      with _ ->
-        Lwt_io.eprintl
-        @@ Printf.sprintf "Cannot connect to server %s:%d"
-             (Unix.string_of_inet_addr addr)
-             port
-    in
-    Lwt.return fd
+    try%lwt
+      let* _ = Lwt_unix.connect fd sockaddr in
+      let* _ = Lwt_io.printl "Connected!" in
+      Lwt.return fd
+    with _ ->
+      Lwt_io.eprintl
+      @@ Printf.sprintf "Cannot connect to server %s:%d"
+           (Unix.string_of_inet_addr addr)
+           port
+      >>= exit 1
 
-  (** Connects to server and creates initial state then starts listener 
-      and sender processses *)
+  (** Connects to server, creates initial state then starts listen
+      and send loops *)
   let init address port =
     let* _ = Lwt_io.printl "Connecting to server..\nType 'quit' to exit\n" in
     let* input, output = create_socket address port >>= create_channels in
     let mailbox = Lwt_mvar.create_empty () in
     let buf = Bytes.create buffer_size in
     let state = { input; output; mailbox; buf } in
-    (* Use Lwt.pick so that the program shuts down when the connection is
-       closed, use try%lwt to pass any exceptions up the call stack *)
+    (* Use Lwt.pick so that the program shuts down when the connection is closed *)
     Lwt.pick [ listen_loop state; send_loop state ]
 
   (** Entrypoint *)
